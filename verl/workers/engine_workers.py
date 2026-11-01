@@ -59,6 +59,16 @@ from verl.workers.config import (
 from verl.workers.rollout.base import BaseRollout, get_rollout_class
 from verl.workers.utils.losses import ppo_loss
 
+
+def _qpatch_tap(gen, global_steps):  # [qpatch] code-space delta tap; no-op unless QPATCH_TAP is set
+    import os
+
+    if not os.environ.get("QPATCH_TAP"):
+        return gen
+    from qpatch.tap import maybe_wrap
+
+    return maybe_wrap(gen, global_steps)
+
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
@@ -819,6 +829,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 metrics = await self.checkpoint_engine.send_weights(self.actor.engine, global_steps=global_steps)
             else:
                 per_tensor_param, _ = self.actor.engine.get_per_tensor_param()
+                per_tensor_param = _qpatch_tap(per_tensor_param, global_steps)  # [qpatch]
                 metrics = await self.checkpoint_engine.send_weights(per_tensor_param, global_steps=global_steps)
             if self.actor.engine.is_param_offload_enabled:
                 self.actor.engine.to("cpu", model=True, optimizer=False, grad=False)
@@ -845,6 +856,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param(
             layered_summon=self.layered_summon, base_sync_done=True
         )
+        if peft_config is None:
+            per_tensor_param = _qpatch_tap(per_tensor_param, global_steps)  # [qpatch]
 
         do_lora_base_sync = False
         if not self.peft_merge and peft_config is not None:
